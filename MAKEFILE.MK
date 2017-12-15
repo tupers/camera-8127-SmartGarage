@@ -1,0 +1,17 @@
+MODBUS_DIR := $(shell pwd)/src
+MODBUS_INCLUDE_DIR := $(MODBUS_DIR)/include/modbus
+MODBUS_LIB_DIR := $(MODBUS_DIR)/lib
+
+INTERFACE_DIR := $(shell pwd)/interface
+INTERFACE_INCLUDE_DIR := $(INTERFACE_DIR)/inc
+INTERFACE_LIB_DIR := $(INTERFACE_DIR)/lib
+
+CROSS_COMPILE := arm-arago-linux-gnueabi-
+
+export MODBUS_DIR
+export MODBUS_INCLUDE_DIR 
+export MODBUS_LIB_DIR
+export INTERFACE_DIR
+export INTERFACE_INCLUDE_DIR 
+export INTERFACE_LIB_DIR
+export CROSS_COMPILE

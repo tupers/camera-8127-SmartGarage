@@ -1,0 +1,156 @@
+#include "gvssApp.h"
+#include "main.h"
+#include "gvssProtocol.h"
+#include "remote_debug_msg_drv.h"
+#include "log.h"
+
+
+//#define BAUM_CAMERA_TYPE		
+
+static GvssObj gGvss;
+
+static int InitGvss(GvssObj *pObj)
+{
+	int ret = 0;
+	
+	pObj->Com.port = PLCSERVER_PORT;
+	ret = Gvss_ProtocolInit(&(pObj->Com));
+	if(ret < 0)
+	{
+		ERR("Gvss_ProtocolInit fail\n");
+
+		return -1;
+	}
+	
+	return 0;
+}
+
+static void ExitGvss(GvssObj *pObj)
+{
+	Gvss_ProtocolExit(&(pObj->Com));
+
+	log_exit();	
+}
+
+
+static unsigned int gGvssQuit = 0;
+void Gvss_signalHandler(int signum)
+{
+    gGvssQuit = 1;
+
+	printf("catch signal\n");
+}
+
+int gvss_dataFormat(GvssResult *pResult,GvsstoPlc *info)
+{
+	unsigned int index;
+	unsigned int t = 0;
+	unsigned int size;
+	
+	GvssRecInfo *recInfo;
+	FinalResult *pFinalResult = (FinalResult *)((unsigned int)info + 320);
+	
+	info->flag[0] = GVSSTOPLC_FLAG;
+	info->flag[1] = GVSSTOPLC_FLAG;
+	info->flag[2] = GVSSTOPLC_FLAG;
+	info->flag[3] = GVSSTOPLC_FLAG;
+	
+	pFinalResult->position = pResult->position;
+	pFinalResult->distance = pResult->distance;
+
+	info->size = sizeof(unsigned short)*2 + pResult->RecNum*sizeof(unsigned short)*3;
+	size = sizeof(info->flag) + info->size + sizeof(info->size);
+	
+	info->data[t++] = pResult->RecNum;
+	recInfo = (GvssRecInfo *)((unsigned int)pResult + sizeof(GvssResult));
+	for(index=0;index<pResult->RecNum;index++)
+	{
+		info->data[t++] = recInfo->area;
+		recInfo++;
+	}
+
+	info->data[t++] = pResult->RecNum;
+	recInfo = (GvssRecInfo *)((unsigned int)pResult + sizeof(GvssResult)); 
+	for(index=0;index<pResult->RecNum;index++)
+	{
+		info->data[t++] = recInfo->xcoord;
+		info->data[t++] = recInfo->ycoord;
+		recInfo++;
+	}
+	
+	return size;
+}
+
+void *GvsstskThrMain(void *pPrm)
+{
+	AlgObj *pObj = (AlgObj *)pPrm;
+	int status;
+	unsigned int isQuit = 0;
+	AlgResultFrame *pFullFrame;
+	GvssResult *pResult;
+	unsigned int size;	
+
+	gGvssQuit = 0;
+	if(InitGvss(&gGvss) < 0)
+		return (void *)0;
+
+	OSA_attachSignalHandler(SIGINT, Gvss_signalHandler);
+
+	GvsstoPlc info;
+	
+	while(gGvssQuit == 0)
+	{
+		status = gGvss.Com.wait_for_client(&(gGvss.Com));
+		if(status < 0)
+		{
+			gGvssQuit = 1;
+			isQuit = 1;
+		}
+
+		printf("accept\n");
+		
+		AppClient_On(TARGET_PLC,pObj);
+		
+		isQuit = gGvssQuit;
+			
+		while((isQuit == 0)&&Gvss_Get_connectState(&(gGvss.Com)))
+		{
+			memset(&info,0,sizeof(info));
+			status = OSA_queGet(&pObj->ResultFullQue, (Int32 *) & pFullFrame,OSA_TIMEOUT_FOREVER);
+			if((status != OSA_SOK)||(pFullFrame == NULL))
+			{
+				isQuit = 1;
+				continue;
+			}
+			pResult = (GvssResult *)(pFullFrame->data);
+
+			size = gvss_dataFormat(pResult,&info); 
+			OSA_quePut(&pObj->ResultFreeQue,(Int32)(pFullFrame), OSA_TIMEOUT_FOREVER);
+				
+			if(Gvss_Get_connectState(&(gGvss.Com))&&(size <= GVSSTOPLC_SIZE))
+			{
+				status = gGvss.Com.send(&(gGvss.Com),&info,GVSSTOPLC_SIZE);				
+				if(status < 0)
+				{
+					printf("send failed\n");
+					isQuit = 1;
+				}
+			}	
+			else
+			{		
+				isQuit = 1;
+			}	
+		}
+
+		AppClient_Off(TARGET_PLC,pObj);
+
+		Gvss_close_connect(&(gGvss.Com));
+	}
+
+	AppClient_Quit(pObj);
+	
+	ExitGvss(&gGvss);
+
+	return (void *)0;	
+}
+
